@@ -14,7 +14,7 @@ import {
   convertSvgToPdf,
   convertSvgToRaster,
   convertVideoToGif,
-  pdfToPngFiles,
+  convertPdfToImages,
 } from "./media.js";
 import { convertModelFile } from "./model.js";
 import {
@@ -33,20 +33,22 @@ import {
   convertWorkoutFile,
 } from "./structured.js";
 
-export async function convertQueueItem(file, output) {
+export async function convertQueueItem(file, output, quality = 0.92) {
   switch (output.kind) {
     case "image":
-      return [await convertImageFile(file, output.value)];
+      return [await convertImageFile(file, output.value, quality)];
     case "image-ico":
       return [await convertImageToIco(file)];
     case "image-pdf":
-      return [await convertSingleImageToPdf(file)];
+      return [await convertSingleImageToPdf(file, quality)];
     case "gif-video":
       return [await convertGifToVideo(file, output.value)];
     case "video-gif":
       return [await convertVideoToGif(file)];
     case "pdf-png":
-      return pdfToPngFiles(file);
+    case "pdf-jpeg":
+    case "pdf-webp":
+      return convertPdfToImages(file, output.value, quality);
     case "media":
       if (extension(file.name) === output.value) {
         return [copyOriginalFile(file, output.value)];
@@ -88,7 +90,7 @@ export async function convertQueueItem(file, output) {
     case "ebook":
       return [await convertEbookFile(file, output.value)];
     case "svg-raster":
-      return [await convertSvgToRaster(file, output.value)];
+      return [await convertSvgToRaster(file, output.value, quality)];
     case "svg-pdf":
       return [await convertSvgToPdf(file)];
     case "font":

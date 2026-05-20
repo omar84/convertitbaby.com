@@ -3,13 +3,13 @@ import { extension } from "./lib/utils.js";
 
 export const OUTPUTS = {
   heic: [
-    { label: "JPG", value: "image/jpeg", kind: "image" },
     { label: "PNG", value: "image/png", kind: "image" },
+    { label: "JPG", value: "image/jpeg", kind: "image" },
     { label: "WebP", value: "image/webp", kind: "image" },
   ],
   image: [
-    { label: "JPG", value: "image/jpeg", kind: "image" },
     { label: "PNG", value: "image/png", kind: "image" },
+    { label: "JPG", value: "image/jpeg", kind: "image" },
     { label: "WebP", value: "image/webp", kind: "image" },
     { label: "AVIF", value: "image/avif", kind: "image" },
     { label: "ICO", value: "ico", kind: "image-ico" },
@@ -21,7 +21,11 @@ export const OUTPUTS = {
     { label: "JPG still", value: "image/jpeg", kind: "image" },
     { label: "PNG still", value: "image/png", kind: "image" },
   ],
-  pdf: [{ label: "PNG images", value: "png", kind: "pdf-png" }],
+  pdf: [
+    { label: "PNG images", value: "image/png", kind: "pdf-png" },
+    { label: "JPG images", value: "image/jpeg", kind: "pdf-jpeg" },
+    { label: "WebP images", value: "image/webp", kind: "pdf-webp" },
+  ],
   video: [
     { label: "GIF", value: "gif", kind: "video-gif" },
     { label: "WebM", value: "webm", kind: "media" },

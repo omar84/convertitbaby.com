@@ -14,6 +14,7 @@ const state = {
   items: [],
   urls: [],
   isConverting: false,
+  quality: 0.92,
 };
 
 setObjectUrlTracker((url) => state.urls.push(url));
@@ -29,6 +30,33 @@ const downloadAllButton = document.querySelector("#download-all-button");
 const statusEl = document.querySelector(".status");
 const progressEl = document.querySelector(".progress");
 const progressBar = document.querySelector(".progress-bar");
+
+// --- Quality Slider UI Element Setup ---
+const sliderContainer = document.createElement("div");
+sliderContainer.className = "quality-settings-panel";
+sliderContainer.style.margin = "1rem 0";
+sliderContainer.style.display = "none";
+
+sliderContainer.innerHTML = `
+  <label for="global-quality-slider" style="font-weight: bold; font-size: 0.95rem; display: block; margin-bottom: 0.25rem;">
+    Image Quality: <span id="global-quality-value">92</span>%
+  </label>
+  <input type="range" id="global-quality-slider" min="1" max="100" value="92" style="width: 100%; max-width: 300px; cursor: pointer;">
+`;
+
+queueEl.parentNode.insertBefore(sliderContainer, queueEl);
+
+const qualitySlider = sliderContainer.querySelector("#global-quality-slider");
+const qualityValueDisplay = sliderContainer.querySelector("#global-quality-value");
+
+qualitySlider.addEventListener("input", (e) => {
+  const displayVal = parseInt(e.target.value, 10);
+  qualityValueDisplay.textContent = displayVal;
+  
+  // Prevent WebP layout engine bloat at 100% by applying a near-lossless float cap
+  state.quality = displayVal === 100 ? 0.999999 : displayVal / 100;
+});
+// ----------------------------------------
 
 fileInput.addEventListener("change", () => addFiles(fileInput.files));
 
@@ -49,6 +77,7 @@ fileInput.addEventListener("change", () => addFiles(fileInput.files));
 dropzone.addEventListener("drop", (event) =>
   addFiles(event.dataTransfer.files),
 );
+
 goButton.addEventListener("click", convertAll);
 clearButton.addEventListener("click", clearQueue);
 downloadAllButton.addEventListener("click", downloadAll);
@@ -76,12 +105,48 @@ function addFiles(fileList) {
   state.items.push(...newItems);
   fileInput.value = "";
   renderQueue();
+  updateSliderVisibility();
   setStatus(
     state.items.length
       ? `${state.items.length} file${state.items.length === 1 ? "" : "s"} ready.`
       : "Drop files to begin.",
   );
   queuePanel.scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+function updateSliderVisibility() {
+  const lossyMimeTypes = ["image/jpeg", "image/webp"];
+
+  const hasLossyOutputActive = state.items.some((item) => {
+    if (!item.output) return false;
+    
+    const outputMime = item.output.toLowerCase();
+
+    if (lossyMimeTypes.includes(outputMime)) return true;
+
+    const outputOption = getOutputOptions(item).find(opt => opt.value === item.output);
+    if (outputOption) {
+      const outputKind = outputOption.kind?.toLowerCase() || "";
+      
+      if (outputKind.includes("jpeg") || outputKind.includes("webp")) {
+        return true;
+      }
+
+      const isSourceImageOrSvg = ["image", "svg", "svg-raster"].includes(item.kind);
+      const isTargetingPdf = outputMime.includes("pdf") || outputKind.includes("pdf");
+      if (isSourceImageOrSvg && isTargetingPdf) {
+        return true;
+      }
+    }
+
+    return false;
+  });
+
+  const nextDisplayState = hasLossyOutputActive ? "block" : "none";
+  
+  if (sliderContainer.style.display !== nextDisplayState) {
+    sliderContainer.style.display = nextDisplayState;
+  }
 }
 
 function renderQueue() {
@@ -124,6 +189,7 @@ function renderQueue() {
       item.status = "Ready";
       revokeItemDownloads(item);
       renderQueue();
+      updateSliderVisibility();
     });
 
     const status = document.createElement("div");
@@ -139,6 +205,7 @@ function renderQueue() {
       state.items = state.items.filter((candidate) => candidate.id !== item.id);
       revokeItemDownloads(item);
       renderQueue();
+      updateSliderVisibility();
     });
 
     const downloads = document.createElement("div");
@@ -174,6 +241,8 @@ async function convertAll() {
   );
   let completed = 0;
 
+  qualitySlider.disabled = true;
+
   try {
     renderQueue();
 
@@ -183,7 +252,9 @@ async function convertAll() {
         revokeItemDownloads(item);
         renderQueue();
         const output = getSelectedOutput(item);
-        const downloads = await convertQueueItem(item.file, output);
+        
+        const downloads = await convertQueueItem(item.file, output, state.quality);
+        
         item.downloads = downloads.map((download) =>
           createDownload(download.blob, download.filename, download.mimeType),
         );
@@ -212,7 +283,9 @@ async function convertAll() {
     );
   } finally {
     setConversionActive(false);
+    qualitySlider.disabled = false;
     renderQueue();
+    updateSliderVisibility();
   }
 }
 
@@ -295,6 +368,7 @@ function clearQueue() {
   clearDownloads();
   setProgress(null);
   renderQueue();
+  updateSliderVisibility();
   setStatus("Drop files to begin.");
 }
 

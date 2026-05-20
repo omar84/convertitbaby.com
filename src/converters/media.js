@@ -23,7 +23,7 @@ import {
   writeAscii,
 } from "../lib/utils.js";
 
-export async function convertSvgToRaster(file, outputValue) {
+export async function convertSvgToRaster(file, outputValue, quality = 0.92) {
   const image = await loadImageFromBlob(file);
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalWidth || 512;
@@ -33,7 +33,7 @@ export async function convertSvgToRaster(file, outputValue) {
   revokeImage(image);
   const mime = outputValue === "webp" ? "image/webp" : "image/png";
   return {
-    blob: await canvasToBlob(canvas, mime, 0.92),
+    blob: await canvasToBlob(canvas, mime, quality),
     filename: rename(file.name, outputValue),
     mimeType: mime,
   };
@@ -42,7 +42,7 @@ export async function convertSvgToRaster(file, outputValue) {
 export async function convertSvgToPdf(file) {
   const png = await convertSvgToRaster(file, "png");
   const imageFile = new File([png.blob], png.filename, { type: png.mimeType });
-  return convertSingleImageToPdf(imageFile);
+  return convertSingleImageToPdf(imageFile, quality);
 }
 
 export async function convertImageToIco(file) {
@@ -90,12 +90,15 @@ export async function convertImageFile(file, mime, quality = 0.92) {
   };
 }
 
-export async function convertSingleImageToPdf(file) {
+export async function convertSingleImageToPdf(file, quality = 0.92) {
   const { PDFDocument } = await loadPdfLib();
   const pdf = await PDFDocument.create();
-  const pngBlob = await imageFileToPng(file);
-  const bytes = await pngBlob.arrayBuffer();
-  const image = await pdf.embedPng(bytes);
+
+  const canvas = await imageFileToCanvas(file, "image/jpeg");
+  const jpegBlob = await canvasToBlob(canvas, "image/jpeg", quality);
+  const bytes = await jpegBlob.arrayBuffer();
+  const image = await pdf.embedJpg(bytes);
+
   const page = pdf.addPage([image.width, image.height]);
   page.drawImage(image, {
     x: 0,
@@ -103,6 +106,7 @@ export async function convertSingleImageToPdf(file) {
     width: image.width,
     height: image.height,
   });
+
   const pdfBytes = await pdf.save();
   return {
     blob: new Blob([pdfBytes], { type: "application/pdf" }),
@@ -302,10 +306,10 @@ export async function convertVideoToGif(file) {
   };
 }
 
-export async function pdfToPngFiles(file) {
+export async function convertPdfToImages(file, targetMime = "image/png", quality = 0.92) {
+  const targetExt = extensionForMime(targetMime);
   const pdfjs = await loadPdfJs();
-  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() })
-    .promise;
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   const downloads = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -314,12 +318,16 @@ export async function pdfToPngFiles(file) {
     const canvas = document.createElement("canvas");
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
+    
     const ctx = canvas.getContext("2d", { alpha: false });
     await page.render({ canvasContext: ctx, viewport }).promise;
+
+    const finalQuality = targetMime === "image/png" ? undefined : quality;
+
     downloads.push({
-      blob: await canvasToBlob(canvas, "image/png"),
-      filename: `${baseName(file.name)}-page-${String(pageNumber).padStart(2, "0")}.png`,
-      mimeType: "image/png",
+      blob: await canvasToBlob(canvas, targetMime, finalQuality),
+      filename: `${baseName(file.name)}-page-${String(pageNumber).padStart(2, "0")}.${targetExt}`,
+      mimeType: targetMime,
     });
   }
 
