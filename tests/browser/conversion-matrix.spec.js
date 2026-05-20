@@ -29,7 +29,11 @@ const outputsByKind = {
     { label: "JPG still", value: "image/jpeg", extension: ".jpg" },
     { label: "PNG still", value: "image/png", extension: ".png" },
   ],
-  pdf: [{ label: "PNG images", value: "png", extension: ".png" }],
+  pdf: [
+    { label: "PNG images", value: "image/png", extension: ".png" },
+    { label: "JPG images", value: "image/jpeg", extension: ".jpg" },
+    { label: "WebP images", value: "image/webp", extension: ".webp" },
+  ],
   video: [
     { label: "GIF", value: "gif", extension: ".gif" },
     { label: "WebM", value: "webm", extension: ".webm" },

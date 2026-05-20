@@ -16,8 +16,6 @@ import {
   extensionForMime,
   floatToInt16,
   once,
-  readUint16,
-  readUint32,
   rename,
   wait,
   writeAscii,
@@ -39,8 +37,8 @@ export async function convertSvgToRaster(file, outputValue, quality = 0.92) {
   };
 }
 
-export async function convertSvgToPdf(file) {
-  const png = await convertSvgToRaster(file, "png");
+export async function convertSvgToPdf(file, quality = 0.92) {
+  const png = await convertSvgToRaster(file, "png", quality);
   const imageFile = new File([png.blob], png.filename, { type: png.mimeType });
   return convertSingleImageToPdf(imageFile, quality);
 }

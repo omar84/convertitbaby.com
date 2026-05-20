@@ -92,7 +92,7 @@ export async function convertQueueItem(file, output, quality = 0.92) {
     case "svg-raster":
       return [await convertSvgToRaster(file, output.value, quality)];
     case "svg-pdf":
-      return [await convertSvgToPdf(file)];
+      return [await convertSvgToPdf(file, quality)];
     case "font":
       return [convertCopyOnlyFormat(file, output.value, "font")];
     case "model3d":
