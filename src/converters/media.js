@@ -242,11 +242,40 @@ export async function convertGifToVideo(file, outputFormat) {
     event.data.size && chunks.push(event.data);
   recorder.start();
 
+  // 1. This canvas accumulates the progressive pixel changes of the GIF
+  const accumulationCanvas = document.createElement("canvas");
+  accumulationCanvas.width = canvas.width;
+  accumulationCanvas.height = canvas.height;
+  const accumCtx = accumulationCanvas.getContext("2d");
+
+  // 2. This canvas handles temporary raw patch data parsing
+  const patchCanvas = document.createElement("canvas");
+  const patchCtx = patchCanvas.getContext("2d");
+
   for (let index = 0; index < frames.length; index += 1) {
     const frame = frames[index];
-    const frameImage = ctx.createImageData(frame.dims.width, frame.dims.height);
+
+    // Setup patch canvas size to fit this specific frame chunk
+    patchCanvas.width = frame.dims.width;
+    patchCanvas.height = frame.dims.height;
+    
+    const frameImage = patchCtx.createImageData(frame.dims.width, frame.dims.height);
     frameImage.data.set(frame.patch);
-    ctx.putImageData(frameImage, frame.dims.left, frame.dims.top);
+    patchCtx.putImageData(frameImage, 0, 0);
+
+    // If disposal method is 2 (restore to background), clear the frame area before drawing
+    if (frame.disposalType === 2) {
+      accumCtx.clearRect(frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height);
+    }
+
+    // Composite the new frame patch directly onto the accumulated master layer
+    accumCtx.drawImage(patchCanvas, frame.dims.left, frame.dims.top);
+
+    // 3. Render the output frame onto the final video track against a clean white backdrop
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(accumulationCanvas, 0, 0);
+
     await wait(Math.max(20, frame.delay || 100));
   }
 
