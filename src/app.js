@@ -115,24 +115,25 @@ function addFiles(fileList) {
 }
 
 function updateSliderVisibility() {
-  const lossyMimeTypes = ["image/jpeg", "image/webp"];
+  const lossyOutputs = ["image/jpeg", "image/webp", "jpeg", "jpg", "webp"];
 
   const hasLossyOutputActive = state.items.some((item) => {
     if (!item.output) return false;
-    
+
     const outputMime = item.output.toLowerCase();
 
-    if (lossyMimeTypes.includes(outputMime)) return true;
+    if (lossyOutputs.includes(outputMime)) return true;
 
     const outputOption = getOutputOptions(item).find(opt => opt.value === item.output);
     if (outputOption) {
       const outputKind = outputOption.kind?.toLowerCase() || "";
-      
+
       if (outputKind.includes("jpeg") || outputKind.includes("webp")) {
         return true;
       }
 
-      const isSourceImageOrSvg = ["image", "svg", "svg-raster"].includes(item.kind);
+      // SVG uploads are classified as "vector"; image→PDF also uses the quality slider.
+      const isSourceImageOrSvg = ["image", "vector"].includes(item.kind);
       const isTargetingPdf = outputMime.includes("pdf") || outputKind.includes("pdf");
       if (isSourceImageOrSvg && isTargetingPdf) {
         return true;

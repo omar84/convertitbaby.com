@@ -92,7 +92,16 @@ export async function convertSingleImageToPdf(file, quality = 0.92) {
   const { PDFDocument } = await loadPdfLib();
   const pdf = await PDFDocument.create();
 
-  const canvas = await imageFileToCanvas(file, "image/jpeg");
+  const source = await imageFileToCanvas(file, "image/png");
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext("2d");
+  // JPEG has no alpha; flatten transparency onto white to avoid a black backdrop.
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, 0, 0);
+
   const jpegBlob = await canvasToBlob(canvas, "image/jpeg", quality);
   const bytes = await jpegBlob.arrayBuffer();
   const image = await pdf.embedJpg(bytes);
@@ -240,40 +249,46 @@ export async function convertGifToVideo(file, outputFormat) {
     event.data.size && chunks.push(event.data);
   recorder.start();
 
-  // 1. This canvas accumulates the progressive pixel changes of the GIF
+  // Accumulation canvas holds the progressive GIF composite.
   const accumulationCanvas = document.createElement("canvas");
   accumulationCanvas.width = canvas.width;
   accumulationCanvas.height = canvas.height;
   const accumCtx = accumulationCanvas.getContext("2d");
 
-  // 2. This canvas handles temporary raw patch data parsing
+  // Patch canvas holds each frame's raw pixel patch before compositing.
   const patchCanvas = document.createElement("canvas");
   const patchCtx = patchCanvas.getContext("2d");
+
+  let previousFrame = null;
 
   for (let index = 0; index < frames.length; index += 1) {
     const frame = frames[index];
 
-    // Setup patch canvas size to fit this specific frame chunk
+    // Disposal applies after a frame is shown, before the next frame is drawn.
+    if (previousFrame?.disposalType === 2) {
+      accumCtx.clearRect(
+        previousFrame.dims.left,
+        previousFrame.dims.top,
+        previousFrame.dims.width,
+        previousFrame.dims.height,
+      );
+    }
+
     patchCanvas.width = frame.dims.width;
     patchCanvas.height = frame.dims.height;
-    
+
     const frameImage = patchCtx.createImageData(frame.dims.width, frame.dims.height);
     frameImage.data.set(frame.patch);
     patchCtx.putImageData(frameImage, 0, 0);
 
-    // If disposal method is 2 (restore to background), clear the frame area before drawing
-    if (frame.disposalType === 2) {
-      accumCtx.clearRect(frame.dims.left, frame.dims.top, frame.dims.width, frame.dims.height);
-    }
-
-    // Composite the new frame patch directly onto the accumulated master layer
     accumCtx.drawImage(patchCanvas, frame.dims.left, frame.dims.top);
 
-    // 3. Render the output frame onto the final video track against a clean white backdrop
+    // Flatten onto white for the video track (no alpha in MediaRecorder output).
     ctx.fillStyle = "#ffffff";
     ctx.fillRect(0, 0, canvas.width, canvas.height);
     ctx.drawImage(accumulationCanvas, 0, 0);
 
+    previousFrame = frame;
     await wait(Math.max(20, frame.delay || 100));
   }
 
