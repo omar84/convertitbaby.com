@@ -10,6 +10,8 @@ import {
   convertImageFile,
   convertImageToIco,
   convertMediaFile,
+  convertMidiFileToMp3,
+  compressPdfFile,
   convertSingleImageToPdf,
   convertSvgToPdf,
   convertSvgToRaster,
@@ -45,6 +47,8 @@ export async function convertQueueItem(file, output, quality = 0.92) {
       return [await convertGifToVideo(file, output.value)];
     case "video-gif":
       return [await convertVideoToGif(file)];
+    case "pdf-compress":
+      return [await compressPdfFile(file)];
     case "pdf-png":
     case "pdf-jpeg":
     case "pdf-webp":
@@ -63,6 +67,8 @@ export async function convertQueueItem(file, output, quality = 0.92) {
         return [await convertAudioFileToWav(file)];
       }
       return [await convertMediaFile(file, output.value)];
+    case "midi":
+      return [await convertMidiFileToMp3(file)];
     case "archive":
       return [await convertArchiveFile(file, output.value)];
     case "document":

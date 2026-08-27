@@ -21,6 +21,16 @@ import {
   writeAscii,
 } from "../lib/utils.js";
 
+const COMPRESSED_PDF_MAX_EDGE = 1600;
+const COMPRESSED_PDF_MAX_SCALE = 2;
+const COMPRESSED_PDF_JPEG_QUALITY = 0.68;
+const MIDI_ATTACK_SECONDS = 0.006;
+const MIDI_DEFAULT_TEMPO_MICROSECONDS = 500000;
+const MIDI_MIN_NOTE_SECONDS = 0.03;
+const MIDI_MP3_CHUNK_SAMPLES = 1152 * 64;
+const MIDI_RELEASE_SECONDS = 0.08;
+const MIDI_SAMPLE_RATE = 44100;
+
 export async function convertSvgToRaster(file, outputValue, quality = 0.92) {
   const image = await loadImageFromBlob(file);
   const canvas = document.createElement("canvas");
@@ -208,6 +218,17 @@ export async function convertAudioTrackToMp3(file) {
   };
 }
 
+export async function convertMidiFileToMp3(file) {
+  const midi = parseMidiFile(new Uint8Array(await file.arrayBuffer()));
+  const notes = midiNotesToTimedNotes(midi);
+  const blob = await encodeMidiNotesToMp3(notes);
+  return {
+    blob,
+    filename: rename(file.name, "mp3"),
+    mimeType: "audio/mpeg",
+  };
+}
+
 async function decodeAudioBuffer(file) {
   const AudioContextClass = window.AudioContext || window.webkitAudioContext;
   if (!AudioContextClass) {
@@ -220,6 +241,518 @@ async function decodeAudioBuffer(file) {
   } finally {
     await audioContext.close();
   }
+}
+
+function parseMidiFile(bytes) {
+  const reader = createMidiReader(bytes);
+  if (reader.readAscii(4) !== "MThd") {
+    throw new Error("That MIDI file could not be read.");
+  }
+
+  const headerLength = reader.readUint32();
+  if (headerLength < 6) {
+    throw new Error("That MIDI file could not be read.");
+  }
+  const headerEnd = reader.offset + headerLength;
+  if (headerEnd > bytes.length) {
+    throw new Error("That MIDI file could not be read.");
+  }
+
+  reader.readUint16();
+  const trackCount = reader.readUint16();
+  const division = reader.readUint16();
+  reader.seek(headerEnd);
+
+  if (!trackCount || !division || (division & 0x8000)) {
+    throw new Error(
+      "That MIDI timing format is not available for MP3 export.",
+    );
+  }
+
+  const events = [];
+  const tempos = [
+    { tick: 0, microsecondsPerQuarter: MIDI_DEFAULT_TEMPO_MICROSECONDS },
+  ];
+
+  for (let trackIndex = 0; trackIndex < trackCount; trackIndex += 1) {
+    if (reader.offset >= bytes.length) {
+      throw new Error("That MIDI file could not be read.");
+    }
+
+    const chunkId = reader.readAscii(4);
+    const chunkLength = reader.readUint32();
+    const chunkStart = reader.offset;
+    const chunkEnd = chunkStart + chunkLength;
+    if (chunkEnd > bytes.length) {
+      throw new Error("That MIDI file could not be read.");
+    }
+
+    if (chunkId === "MTrk") {
+      parseMidiTrack(bytes.subarray(chunkStart, chunkEnd), events, tempos);
+    }
+    reader.seek(chunkEnd);
+  }
+
+  return {
+    events,
+    tempos,
+    ticksPerQuarter: division,
+  };
+}
+
+function parseMidiTrack(bytes, events, tempos) {
+  let offset = 0;
+  let runningStatus = 0;
+  let tick = 0;
+
+  while (offset < bytes.length) {
+    const delta = readMidiVariableLength(bytes, offset);
+    offset = delta.offset;
+    tick += delta.value;
+    if (offset >= bytes.length) {
+      throw new Error("That MIDI file could not be read.");
+    }
+
+    let status = bytes[offset];
+    offset += 1;
+    if (status < 0x80) {
+      if (!runningStatus) {
+        throw new Error("That MIDI file could not be read.");
+      }
+      offset -= 1;
+      status = runningStatus;
+    } else if (status < 0xf0) {
+      runningStatus = status;
+    }
+
+    if (status === 0xff) {
+      if (offset >= bytes.length) {
+        throw new Error("That MIDI file could not be read.");
+      }
+      const metaType = bytes[offset];
+      offset += 1;
+      const length = readMidiVariableLength(bytes, offset);
+      offset = length.offset;
+      const payloadStart = offset;
+      const payloadEnd = payloadStart + length.value;
+      if (payloadEnd > bytes.length) {
+        throw new Error("That MIDI file could not be read.");
+      }
+
+      if (metaType === 0x51 && length.value === 3) {
+        tempos.push({
+          tick,
+          microsecondsPerQuarter:
+            (bytes[payloadStart] << 16) |
+            (bytes[payloadStart + 1] << 8) |
+            bytes[payloadStart + 2],
+        });
+      }
+
+      offset = payloadEnd;
+      if (metaType === 0x2f) break;
+      continue;
+    }
+
+    if (status === 0xf0 || status === 0xf7) {
+      const length = readMidiVariableLength(bytes, offset);
+      offset = length.offset + length.value;
+      if (offset > bytes.length) {
+        throw new Error("That MIDI file could not be read.");
+      }
+      continue;
+    }
+
+    if (status >= 0xf0) {
+      const dataLength = { 0xf1: 1, 0xf2: 2, 0xf3: 1 }[status] || 0;
+      if (offset + dataLength > bytes.length) {
+        throw new Error("That MIDI file could not be read.");
+      }
+      offset += dataLength;
+      continue;
+    }
+
+    const eventType = status & 0xf0;
+    const channel = status & 0x0f;
+    const dataLength = eventType === 0xc0 || eventType === 0xd0 ? 1 : 2;
+    if (offset + dataLength > bytes.length) {
+      throw new Error("That MIDI file could not be read.");
+    }
+
+    const note = bytes[offset];
+    const velocity = dataLength > 1 ? bytes[offset + 1] : 0;
+    offset += dataLength;
+
+    if (eventType === 0x90 && velocity > 0) {
+      events.push({
+        channel,
+        note,
+        order: events.length,
+        tick,
+        type: "noteOn",
+        velocity,
+      });
+    } else if (eventType === 0x80 || eventType === 0x90) {
+      events.push({
+        channel,
+        note,
+        order: events.length,
+        tick,
+        type: "noteOff",
+        velocity: 0,
+      });
+    }
+  }
+}
+
+function midiNotesToTimedNotes(midi) {
+  const tempoMap = createMidiTempoMap(midi.tempos, midi.ticksPerQuarter);
+  const openNotes = Array.from({ length: 16 }, () =>
+    Array.from({ length: 128 }, () => []),
+  );
+  const notes = [];
+  let lastTick = 0;
+  const events = [...midi.events].sort(
+    (a, b) =>
+      a.tick - b.tick ||
+      midiEventPriority(a) - midiEventPriority(b) ||
+      a.order - b.order,
+  );
+
+  for (const event of events) {
+    lastTick = Math.max(lastTick, event.tick);
+    const stack = openNotes[event.channel]?.[event.note];
+    if (!stack) continue;
+
+    if (event.type === "noteOn") {
+      stack.push(event);
+      continue;
+    }
+
+    const start = stack.shift();
+    if (start) {
+      notes.push(
+        timedMidiNote(start, event.tick, tempoMap, midi.ticksPerQuarter),
+      );
+    }
+  }
+
+  const fallbackEndTick = lastTick + midi.ticksPerQuarter;
+  for (const channel of openNotes) {
+    for (const stack of channel) {
+      for (const start of stack) {
+        const endTick = Math.max(
+          fallbackEndTick,
+          start.tick + Math.round(midi.ticksPerQuarter / 2),
+        );
+        notes.push(
+          timedMidiNote(start, endTick, tempoMap, midi.ticksPerQuarter),
+        );
+      }
+    }
+  }
+
+  const playableNotes = notes.filter(
+    (note) =>
+      Number.isFinite(note.startSeconds) && Number.isFinite(note.endSeconds),
+  );
+  if (!playableNotes.length) {
+    throw new Error("That MIDI file does not contain playable notes.");
+  }
+  return playableNotes.sort((a, b) => a.startSeconds - b.startSeconds);
+}
+
+function timedMidiNote(start, endTick, tempoMap, ticksPerQuarter) {
+  const startSeconds = midiTickToSeconds(
+    start.tick,
+    tempoMap,
+    ticksPerQuarter,
+  );
+  const rawEndSeconds = midiTickToSeconds(
+    Math.max(endTick, start.tick + 1),
+    tempoMap,
+    ticksPerQuarter,
+  );
+  return {
+    channel: start.channel,
+    endSeconds: Math.max(
+      rawEndSeconds,
+      startSeconds + MIDI_MIN_NOTE_SECONDS,
+    ),
+    note: start.note,
+    startSeconds,
+    velocity: start.velocity,
+  };
+}
+
+function createMidiTempoMap(tempos, ticksPerQuarter) {
+  const sortedTempos = tempos
+    .filter((tempo) => tempo.microsecondsPerQuarter > 0)
+    .sort((a, b) => a.tick - b.tick);
+  let lastTick = 0;
+  let seconds = 0;
+  let microsecondsPerQuarter = MIDI_DEFAULT_TEMPO_MICROSECONDS;
+  const map = [
+    {
+      tick: 0,
+      seconds: 0,
+      microsecondsPerQuarter,
+    },
+  ];
+
+  for (const tempo of sortedTempos) {
+    const tick = Math.max(0, tempo.tick);
+    if (tick > lastTick) {
+      seconds +=
+        ((tick - lastTick) * microsecondsPerQuarter) /
+        (ticksPerQuarter * 1_000_000);
+      lastTick = tick;
+    }
+    microsecondsPerQuarter = tempo.microsecondsPerQuarter;
+    const entry = { tick, seconds, microsecondsPerQuarter };
+    if (map[map.length - 1]?.tick === tick) {
+      map[map.length - 1] = entry;
+    } else {
+      map.push(entry);
+    }
+  }
+
+  return map;
+}
+
+function midiTickToSeconds(tick, tempoMap, ticksPerQuarter) {
+  let low = 0;
+  let high = tempoMap.length - 1;
+  while (low < high) {
+    const middle = Math.ceil((low + high) / 2);
+    if (tempoMap[middle].tick <= tick) {
+      low = middle;
+    } else {
+      high = middle - 1;
+    }
+  }
+
+  const tempo = tempoMap[low];
+  return (
+    tempo.seconds +
+    ((tick - tempo.tick) * tempo.microsecondsPerQuarter) /
+      (ticksPerQuarter * 1_000_000)
+  );
+}
+
+function midiEventPriority(event) {
+  return event.type === "noteOff" ? 0 : 1;
+}
+
+async function encodeMidiNotesToMp3(notes) {
+  const Mp3Encoder = await getMp3EncoderCtor();
+  if (!Mp3Encoder) {
+    throw new Error("MP3 is not available for this file.");
+  }
+
+  const duration = notes.reduce(
+    (max, note) => Math.max(max, note.endSeconds),
+    0,
+  );
+  const totalSamples = Math.max(
+    1,
+    Math.ceil((duration + MIDI_RELEASE_SECONDS + 0.2) * MIDI_SAMPLE_RATE),
+  );
+
+  const encoder = new Mp3Encoder(2, MIDI_SAMPLE_RATE, 128);
+  const chunks = [];
+  const frameSize = 1152;
+  const activeNotes = [];
+  let nextNoteIndex = 0;
+
+  for (
+    let chunkStart = 0;
+    chunkStart < totalSamples;
+    chunkStart += MIDI_MP3_CHUNK_SAMPLES
+  ) {
+    const chunkEnd = Math.min(
+      totalSamples,
+      chunkStart + MIDI_MP3_CHUNK_SAMPLES,
+    );
+    const chunkLength = chunkEnd - chunkStart;
+    const chunkStartSeconds = chunkStart / MIDI_SAMPLE_RATE;
+    const chunkEndSeconds = chunkEnd / MIDI_SAMPLE_RATE;
+
+    while (
+      nextNoteIndex < notes.length &&
+      notes[nextNoteIndex].startSeconds < chunkEndSeconds
+    ) {
+      activeNotes.push(notes[nextNoteIndex]);
+      nextNoteIndex += 1;
+    }
+
+    for (let index = activeNotes.length - 1; index >= 0; index -= 1) {
+      if (
+        activeNotes[index].endSeconds + MIDI_RELEASE_SECONDS <=
+        chunkStartSeconds
+      ) {
+        activeNotes.splice(index, 1);
+      }
+    }
+
+    const channels = renderMidiChunk(activeNotes, chunkStart, chunkLength);
+    normalizeAudioChannels(channels);
+    const left = floatToInt16(channels[0]);
+    const right = floatToInt16(channels[1]);
+
+    for (let offset = 0; offset < left.length; offset += frameSize) {
+      const mp3Buffer = encoder.encodeBuffer(
+        left.subarray(offset, offset + frameSize),
+        right.subarray(offset, offset + frameSize),
+      );
+      if (mp3Buffer.length) chunks.push(mp3Buffer);
+    }
+
+    await wait(0);
+  }
+
+  const finalBuffer = encoder.flush();
+  if (finalBuffer.length) chunks.push(finalBuffer);
+  return new Blob(chunks, { type: "audio/mpeg" });
+}
+
+function renderMidiChunk(notes, chunkStart, chunkLength) {
+  const channels = [
+    new Float32Array(chunkLength),
+    new Float32Array(chunkLength),
+  ];
+  for (const note of notes) {
+    renderMidiNote(note, channels, chunkStart);
+  }
+  return channels;
+}
+
+function renderMidiNote(note, [left, right], sampleOffset = 0) {
+  const noteStartIndex = Math.floor(note.startSeconds * MIDI_SAMPLE_RATE);
+  const releaseStartIndex = Math.max(
+    noteStartIndex + 1,
+    Math.floor(note.endSeconds * MIDI_SAMPLE_RATE),
+  );
+  const startIndex = Math.max(
+    0,
+    noteStartIndex - sampleOffset,
+  );
+  const endIndex = Math.min(
+    left.length,
+    Math.ceil((note.endSeconds + MIDI_RELEASE_SECONDS) * MIDI_SAMPLE_RATE) -
+      sampleOffset,
+  );
+  const attackSamples = Math.max(
+    1,
+    Math.floor(MIDI_ATTACK_SECONDS * MIDI_SAMPLE_RATE),
+  );
+  const releaseSamples = Math.max(
+    1,
+    Math.floor(MIDI_RELEASE_SECONDS * MIDI_SAMPLE_RATE),
+  );
+  const frequency = 440 * 2 ** ((note.note - 69) / 12);
+  const velocity = Math.max(1, Math.min(127, note.velocity)) / 127;
+  const amplitude = velocity * 0.09;
+  const pan = Math.max(-0.35, Math.min(0.35, (note.note - 60) / 48));
+  const leftGain = Math.cos(((pan + 1) * Math.PI) / 4);
+  const rightGain = Math.sin(((pan + 1) * Math.PI) / 4);
+
+  for (let index = startIndex; index < endIndex; index += 1) {
+    const absoluteIndex = sampleOffset + index;
+    const elapsedSamples = absoluteIndex - noteStartIndex;
+    const elapsedSeconds = elapsedSamples / MIDI_SAMPLE_RATE;
+    const envelope =
+      absoluteIndex < releaseStartIndex
+        ? Math.min(1, (elapsedSamples + 1) / attackSamples)
+        : Math.max(0, 1 - (absoluteIndex - releaseStartIndex) / releaseSamples);
+    const phase = 2 * Math.PI * frequency * elapsedSeconds;
+    const sample =
+      (Math.sin(phase) +
+        0.32 * Math.sin(phase * 2) +
+        0.12 * Math.sin(phase * 3)) *
+      amplitude *
+      envelope;
+    left[index] += sample * leftGain;
+    right[index] += sample * rightGain;
+  }
+}
+
+function normalizeAudioChannels(channels) {
+  let peak = 0;
+  for (const channel of channels) {
+    for (const sample of channel) {
+      peak = Math.max(peak, Math.abs(sample));
+    }
+  }
+  if (peak <= 0.96) return;
+
+  const scale = 0.96 / peak;
+  for (const channel of channels) {
+    for (let index = 0; index < channel.length; index += 1) {
+      channel[index] *= scale;
+    }
+  }
+}
+
+function createMidiReader(bytes) {
+  let offset = 0;
+  const ensure = (length) => {
+    if (offset + length > bytes.length) {
+      throw new Error("That MIDI file could not be read.");
+    }
+  };
+
+  return {
+    get offset() {
+      return offset;
+    },
+    readAscii(length) {
+      ensure(length);
+      let value = "";
+      for (let index = 0; index < length; index += 1) {
+        value += String.fromCharCode(bytes[offset + index]);
+      }
+      offset += length;
+      return value;
+    },
+    readUint16() {
+      ensure(2);
+      const value = (bytes[offset] << 8) | bytes[offset + 1];
+      offset += 2;
+      return value;
+    },
+    readUint32() {
+      ensure(4);
+      const value =
+        ((bytes[offset] << 24) |
+          (bytes[offset + 1] << 16) |
+          (bytes[offset + 2] << 8) |
+          bytes[offset + 3]) >>>
+        0;
+      offset += 4;
+      return value;
+    },
+    seek(value) {
+      if (value < 0 || value > bytes.length) {
+        throw new Error("That MIDI file could not be read.");
+      }
+      offset = value;
+    },
+  };
+}
+
+function readMidiVariableLength(bytes, offset) {
+  let value = 0;
+  for (let index = 0; index < 4; index += 1) {
+    if (offset >= bytes.length) {
+      throw new Error("That MIDI file could not be read.");
+    }
+    const byte = bytes[offset];
+    offset += 1;
+    value = (value << 7) | (byte & 0x7f);
+    if (!(byte & 0x80)) return { offset, value };
+  }
+  throw new Error("That MIDI file could not be read.");
 }
 
 export async function convertGifToVideo(file, outputFormat) {
@@ -348,6 +881,66 @@ export async function convertVideoToGif(file) {
   };
 }
 
+export async function compressPdfFile(file) {
+  const [pdfjs, { PDFDocument }] = await Promise.all([
+    loadPdfJs(),
+    loadPdfLib(),
+  ]);
+  const originalBytes = await file.arrayBuffer();
+  const sourcePdf = await pdfjs.getDocument({ data: originalBytes.slice(0) })
+    .promise;
+  if (!sourcePdf.numPages) throw new Error("Could not find pages in that PDF.");
+
+  const outputPdf = await PDFDocument.create();
+
+  for (let pageNumber = 1; pageNumber <= sourcePdf.numPages; pageNumber += 1) {
+    const sourcePage = await sourcePdf.getPage(pageNumber);
+    const baseViewport = sourcePage.getViewport({ scale: 1 });
+    const scale = compressedPdfScale(baseViewport.width, baseViewport.height);
+    const viewport = sourcePage.getViewport({ scale });
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, Math.floor(viewport.width));
+    canvas.height = Math.max(1, Math.floor(viewport.height));
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.fillStyle = "#fff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    await sourcePage.render({ canvasContext: ctx, viewport }).promise;
+    const jpgBlob = await canvasToBlob(
+      canvas,
+      "image/jpeg",
+      COMPRESSED_PDF_JPEG_QUALITY,
+    );
+    const jpgImage = await outputPdf.embedJpg(await jpgBlob.arrayBuffer());
+    const outputPage = outputPdf.addPage([
+      baseViewport.width,
+      baseViewport.height,
+    ]);
+    outputPage.drawImage(jpgImage, {
+      x: 0,
+      y: 0,
+      width: baseViewport.width,
+      height: baseViewport.height,
+    });
+
+    sourcePage.cleanup();
+    canvas.width = 0;
+    canvas.height = 0;
+  }
+
+  const compressedBytes = await outputPdf.save({ useObjectStreams: true });
+  const bestBytes =
+    compressedBytes.byteLength < originalBytes.byteLength
+      ? compressedBytes
+      : originalBytes;
+
+  return {
+    blob: new Blob([bestBytes], { type: "application/pdf" }),
+    filename: `${baseName(file.name)}-compressed.pdf`,
+    mimeType: "application/pdf",
+  };
+}
+
 export async function convertPdfToImages(file, targetMime = "image/png", quality = 0.92) {
   const targetExt = extensionForMime(targetMime);
   const pdfjs = await loadPdfJs();
@@ -360,7 +953,7 @@ export async function convertPdfToImages(file, targetMime = "image/png", quality
     const canvas = document.createElement("canvas");
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
-    
+
     const ctx = canvas.getContext("2d", { alpha: false });
     await page.render({ canvasContext: ctx, viewport }).promise;
 
@@ -374,6 +967,14 @@ export async function convertPdfToImages(file, targetMime = "image/png", quality
   }
 
   return downloads;
+}
+
+function compressedPdfScale(width, height) {
+  const edgeScale = Math.min(
+    COMPRESSED_PDF_MAX_EDGE / width,
+    COMPRESSED_PDF_MAX_EDGE / height,
+  );
+  return Math.max(0.1, Math.min(COMPRESSED_PDF_MAX_SCALE, edgeScale));
 }
 
 async function imageFileToPng(file) {
