@@ -31,7 +31,7 @@ const MIDI_MP3_CHUNK_SAMPLES = 1152 * 64;
 const MIDI_RELEASE_SECONDS = 0.08;
 const MIDI_SAMPLE_RATE = 44100;
 
-export async function convertSvgToRaster(file, outputValue) {
+export async function convertSvgToRaster(file, outputValue, quality = 0.92) {
   const image = await loadImageFromBlob(file);
   const canvas = document.createElement("canvas");
   canvas.width = image.naturalWidth || 512;
@@ -41,16 +41,16 @@ export async function convertSvgToRaster(file, outputValue) {
   revokeImage(image);
   const mime = outputValue === "webp" ? "image/webp" : "image/png";
   return {
-    blob: await canvasToBlob(canvas, mime, 0.92),
+    blob: await canvasToBlob(canvas, mime, quality),
     filename: rename(file.name, outputValue),
     mimeType: mime,
   };
 }
 
-export async function convertSvgToPdf(file) {
-  const png = await convertSvgToRaster(file, "png");
+export async function convertSvgToPdf(file, quality = 0.92) {
+  const png = await convertSvgToRaster(file, "png", quality);
   const imageFile = new File([png.blob], png.filename, { type: png.mimeType });
-  return convertSingleImageToPdf(imageFile);
+  return convertSingleImageToPdf(imageFile, quality);
 }
 
 export async function convertImageToIco(file) {
@@ -98,12 +98,24 @@ export async function convertImageFile(file, mime, quality = 0.92) {
   };
 }
 
-export async function convertSingleImageToPdf(file) {
+export async function convertSingleImageToPdf(file, quality = 0.92) {
   const { PDFDocument } = await loadPdfLib();
   const pdf = await PDFDocument.create();
-  const pngBlob = await imageFileToPng(file);
-  const bytes = await pngBlob.arrayBuffer();
-  const image = await pdf.embedPng(bytes);
+
+  const source = await imageFileToCanvas(file, "image/png");
+  const canvas = document.createElement("canvas");
+  canvas.width = source.width;
+  canvas.height = source.height;
+  const ctx = canvas.getContext("2d");
+  // JPEG has no alpha; flatten transparency onto white to avoid a black backdrop.
+  ctx.fillStyle = "#fff";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  ctx.drawImage(source, 0, 0);
+
+  const jpegBlob = await canvasToBlob(canvas, "image/jpeg", quality);
+  const bytes = await jpegBlob.arrayBuffer();
+  const image = await pdf.embedJpg(bytes);
+
   const page = pdf.addPage([image.width, image.height]);
   page.drawImage(image, {
     x: 0,
@@ -111,6 +123,7 @@ export async function convertSingleImageToPdf(file) {
     width: image.width,
     height: image.height,
   });
+
   const pdfBytes = await pdf.save();
   return {
     blob: new Blob([pdfBytes], { type: "application/pdf" }),
@@ -769,11 +782,46 @@ export async function convertGifToVideo(file, outputFormat) {
     event.data.size && chunks.push(event.data);
   recorder.start();
 
+  // Accumulation canvas holds the progressive GIF composite.
+  const accumulationCanvas = document.createElement("canvas");
+  accumulationCanvas.width = canvas.width;
+  accumulationCanvas.height = canvas.height;
+  const accumCtx = accumulationCanvas.getContext("2d");
+
+  // Patch canvas holds each frame's raw pixel patch before compositing.
+  const patchCanvas = document.createElement("canvas");
+  const patchCtx = patchCanvas.getContext("2d");
+
+  let previousFrame = null;
+
   for (let index = 0; index < frames.length; index += 1) {
     const frame = frames[index];
-    const frameImage = ctx.createImageData(frame.dims.width, frame.dims.height);
+
+    // Disposal applies after a frame is shown, before the next frame is drawn.
+    if (previousFrame?.disposalType === 2) {
+      accumCtx.clearRect(
+        previousFrame.dims.left,
+        previousFrame.dims.top,
+        previousFrame.dims.width,
+        previousFrame.dims.height,
+      );
+    }
+
+    patchCanvas.width = frame.dims.width;
+    patchCanvas.height = frame.dims.height;
+
+    const frameImage = patchCtx.createImageData(frame.dims.width, frame.dims.height);
     frameImage.data.set(frame.patch);
-    ctx.putImageData(frameImage, frame.dims.left, frame.dims.top);
+    patchCtx.putImageData(frameImage, 0, 0);
+
+    accumCtx.drawImage(patchCanvas, frame.dims.left, frame.dims.top);
+
+    // Flatten onto white for the video track (no alpha in MediaRecorder output).
+    ctx.fillStyle = "#ffffff";
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(accumulationCanvas, 0, 0);
+
+    previousFrame = frame;
     await wait(Math.max(20, frame.delay || 100));
   }
 
@@ -893,10 +941,10 @@ export async function compressPdfFile(file) {
   };
 }
 
-export async function pdfToPngFiles(file) {
+export async function convertPdfToImages(file, targetMime = "image/png", quality = 0.92) {
+  const targetExt = extensionForMime(targetMime);
   const pdfjs = await loadPdfJs();
-  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() })
-    .promise;
+  const pdf = await pdfjs.getDocument({ data: await file.arrayBuffer() }).promise;
   const downloads = [];
 
   for (let pageNumber = 1; pageNumber <= pdf.numPages; pageNumber += 1) {
@@ -905,12 +953,16 @@ export async function pdfToPngFiles(file) {
     const canvas = document.createElement("canvas");
     canvas.width = Math.floor(viewport.width);
     canvas.height = Math.floor(viewport.height);
+
     const ctx = canvas.getContext("2d", { alpha: false });
     await page.render({ canvasContext: ctx, viewport }).promise;
+
+    const finalQuality = targetMime === "image/png" ? undefined : quality;
+
     downloads.push({
-      blob: await canvasToBlob(canvas, "image/png"),
-      filename: `${baseName(file.name)}-page-${String(pageNumber).padStart(2, "0")}.png`,
-      mimeType: "image/png",
+      blob: await canvasToBlob(canvas, targetMime, finalQuality),
+      filename: `${baseName(file.name)}-page-${String(pageNumber).padStart(2, "0")}.${targetExt}`,
+      mimeType: targetMime,
     });
   }
 

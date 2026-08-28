@@ -23,6 +23,8 @@ const conversionEvents = {
     trackOptionalConversionEvent("trackConversionSuccess", args),
 };
 
+const DEFAULT_QUALITY_PERCENT = 92;
+
 const state = {
   items: [],
   urls: [],
@@ -30,12 +32,6 @@ const state = {
   status: { key: "status.dropFiles", params: {} },
 };
 
-initI18n({
-  onLanguageChange: () => {
-    renderQueue();
-    renderStatus();
-  },
-});
 loadConversionEvents();
 setObjectUrlTracker((url) => state.urls.push(url));
 
@@ -52,6 +48,13 @@ const downloadAllButton = document.querySelector("#download-all-button");
 const statusEl = document.querySelector(".status");
 const progressEl = document.querySelector(".progress");
 const progressBar = document.querySelector(".progress-bar");
+
+initI18n({
+  onLanguageChange: () => {
+    renderQueue();
+    renderStatus();
+  },
+});
 
 fileInput.addEventListener("change", () => addFiles(fileInput.files));
 
@@ -72,6 +75,7 @@ fileInput.addEventListener("change", () => addFiles(fileInput.files));
 dropzone.addEventListener("drop", (event) =>
   addFiles(event.dataTransfer.files),
 );
+
 goButton.addEventListener("click", convertAll);
 clearButton.addEventListener("click", clearQueue);
 downloadAllButton.addEventListener("click", downloadAll);
@@ -109,6 +113,46 @@ function addFiles(fileList) {
   queuePanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
+const LOSSY_OUTPUT_VALUES = ["image/jpeg", "image/webp", "jpeg", "jpg", "webp"];
+
+// Whether the item's selected output honours the quality setting.
+function itemSupportsQuality(item) {
+  if (!item.output) return false;
+
+  const outputValue = item.output.toLowerCase();
+  if (LOSSY_OUTPUT_VALUES.includes(outputValue)) return true;
+
+  const outputOption = getOutputOptions(item).find(
+    (option) => option.value === item.output,
+  );
+  if (!outputOption) return false;
+
+  const outputKind = outputOption.kind?.toLowerCase() || "";
+  if (outputKind.includes("jpeg") || outputKind.includes("webp")) return true;
+
+  // SVG uploads are classified as "vector"; image→PDF also uses the quality slider.
+  const isSourceImageOrSvg = ["image", "vector"].includes(item.kind);
+  const isTargetingPdf =
+    outputValue.includes("pdf") || outputKind.includes("pdf");
+  return isSourceImageOrSvg && isTargetingPdf;
+}
+
+// The first item with a visible slider leads: moving it drags every following
+// slider along, until that follower is adjusted on its own and unbinds itself.
+function getQualityLeader() {
+  return state.items.find(itemSupportsQuality) || null;
+}
+
+function clampQualityPercent(value) {
+  if (!Number.isFinite(value)) return DEFAULT_QUALITY_PERCENT;
+  return Math.max(1, Math.min(100, Math.round(value)));
+}
+
+function qualityToFraction(percent) {
+  // Prevent WebP layout engine bloat at 100% by applying a near-lossless float cap
+  return percent === 100 ? 0.999999 : percent / 100;
+}
+
 function createQueueItem(file) {
   const kind = inferFileKind(file);
   const outputs = getOutputOptions({ kind, file });
@@ -121,11 +165,14 @@ function createQueueItem(file) {
     status: defaultOutput ? "ready" : outputs.length ? "unavailable" : "unsupported",
     errorMessage: "",
     downloads: [],
+    qualityPercent: getQualityLeader()?.qualityPercent ?? DEFAULT_QUALITY_PERCENT,
+    qualityUnbound: false,
   };
 }
 
 function renderQueue() {
   queueEl.replaceChildren();
+  const qualityLeader = getQualityLeader();
   emptyQueueEl.hidden = state.items.length > 0;
   const downloads = getAllDownloads();
   const hasConvertibleItems = state.items.some((item) => getSelectedOutput(item));
@@ -195,6 +242,10 @@ function renderQueue() {
       renderQueue();
     });
 
+    const quality = itemSupportsQuality(item)
+      ? createQualityControl(item, item === qualityLeader)
+      : null;
+
     const downloads = document.createElement("div");
     downloads.className = "item-downloads";
     item.downloads.forEach((download) =>
@@ -206,9 +257,68 @@ function renderQueue() {
     supportNote.hidden = !hasDisabledOutputs || item.status === "done";
     supportNote.textContent = t("queue.supportNote");
 
-    row.append(info, select, status, remove, supportNote, downloads);
+    row.append(info, select, status, remove);
+    if (quality) row.append(quality);
+    row.append(supportNote, downloads);
     queueEl.append(row);
   });
+}
+
+function createQualityControl(item, isLeader) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "item-quality";
+  wrapper.dataset.qualityFor = item.id;
+
+  const label = document.createElement("label");
+  label.className = "item-quality-label";
+  label.htmlFor = `quality-${item.id}`;
+  const valueEl = document.createElement("span");
+  valueEl.className = "item-quality-value";
+  valueEl.textContent = String(item.qualityPercent);
+  label.append(`${t("quality.label")}: `, valueEl, "%");
+
+  const slider = document.createElement("input");
+  slider.className = "item-quality-slider";
+  slider.type = "range";
+  slider.id = `quality-${item.id}`;
+  slider.name = `quality-${item.id}`;
+  slider.min = "1";
+  slider.max = "100";
+  slider.value = String(item.qualityPercent);
+  slider.ariaLabel = t("quality.labelFor", { filename: item.file.name });
+  slider.disabled = state.isConverting;
+
+  slider.addEventListener("input", () => {
+    const percent = clampQualityPercent(parseInt(slider.value, 10));
+    item.qualityPercent = percent;
+    valueEl.textContent = String(percent);
+
+    if (isLeader) {
+      state.items.forEach((other) => {
+        if (other === item || other.qualityUnbound) return;
+        other.qualityPercent = percent;
+        syncQualityControl(other);
+      });
+      return;
+    }
+
+    // Adjusting any slider below the first one unbinds it for good.
+    item.qualityUnbound = true;
+  });
+
+  wrapper.append(label, slider);
+  return wrapper;
+}
+
+function syncQualityControl(item) {
+  const wrapper = queueEl.querySelector(`[data-quality-for="${item.id}"]`);
+  if (!wrapper) return;
+  wrapper.querySelector(".item-quality-slider").value = String(
+    item.qualityPercent,
+  );
+  wrapper.querySelector(".item-quality-value").textContent = String(
+    item.qualityPercent,
+  );
 }
 
 function actionSummaryLabel({ downloads, hasPendingConvertibleItems }) {
@@ -250,7 +360,11 @@ async function convertAll() {
         const conversionStartedAt = performance.now();
 
         try {
-          const downloads = await convertQueueItem(item.file, output);
+          const downloads = await convertQueueItem(
+            item.file,
+            output,
+            qualityToFraction(item.qualityPercent),
+          );
           item.downloads = downloads.map((download) =>
             createDownload(download.blob, download.filename, download.mimeType),
           );

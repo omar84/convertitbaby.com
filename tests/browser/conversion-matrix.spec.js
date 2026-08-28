@@ -31,7 +31,9 @@ const outputsByKind = {
   ],
   pdf: [
     { label: "Compressed PDF", value: "compressed-pdf", extension: ".pdf" },
-    { label: "PNG images", value: "png", extension: ".png" },
+    { label: "PNG images", value: "image/png", extension: ".png" },
+    { label: "JPG images", value: "image/jpeg", extension: ".jpg" },
+    { label: "WebP images", value: "image/webp", extension: ".webp" },
   ],
   video: [
     { label: "GIF", value: "gif", extension: ".gif" },

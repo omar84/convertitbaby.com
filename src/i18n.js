@@ -44,6 +44,8 @@ const outputLabelKeys = {
   "PNG still": "output.pngStill",
   "Compressed PDF": "output.compressedPdf",
   "PNG images": "output.pngImages",
+  "JPG images": "output.jpgImages",
+  "WebP images": "output.webpImages",
   "ZIP archive": "output.zipArchive",
   "TAR archive": "output.tarArchive",
   "TGZ archive": "output.tgzArchive",
@@ -96,7 +98,7 @@ const translations = {
       "ZIP, RAR, 7Z, TAR, GZIP, TGZ, BZ2, XZ, Zstandard, Brotli, LZ, and LZMA files can be detected and repackaged.",
     "support.documents.title": "Documents & office",
     "support.documents.body":
-      "DOCX, TXT, Markdown, HTML, PPTX, ODT, ODP, ODS, and XLSX can become readable document or table formats. PDFs can become PNG pages or compressed PDFs.",
+      "DOCX, TXT, Markdown, HTML, PPTX, ODT, ODP, ODS, and XLSX can become readable document or table formats. PDFs can become PNG, JPG, or WebP pages or compressed PDFs.",
     "support.data.title": "Data & spreadsheets",
     "support.data.body":
       "JSON, YAML, CSV, TSV, XML, XLSX, vCard, iCal, and env files can move between structured, readable formats.",
@@ -142,6 +144,8 @@ const translations = {
     "queue.go": "Convert files",
     "queue.empty":
       "Your files will appear here with an output menu for each one.",
+    "quality.label": "Image Quality",
+    "quality.labelFor": ({ filename }) => `Image quality for ${filename}`,
     "action.ready": ({ count }) => `${enPlural(count, "file")} ready`,
     "action.converting": ({ count }) => `Converting ${enPlural(count, "file")}`,
     "action.converted": ({ count }) =>
@@ -221,6 +225,8 @@ const translations = {
     "output.pngStill": "PNG still",
     "output.compressedPdf": "Compressed PDF",
     "output.pngImages": "PNG images",
+    "output.jpgImages": "JPG images",
+    "output.webpImages": "WebP images",
     "output.zipArchive": "ZIP archive",
     "output.tarArchive": "TAR archive",
     "output.tgzArchive": "TGZ archive",
@@ -265,7 +271,7 @@ const translations = {
       "يمكن اكتشاف ملفات ZIP وRAR و7Z وTAR وGZIP وTGZ وBZ2 وXZ وZstandard وBrotli وLZ وLZMA وإعادة حزمها.",
     "support.documents.title": "المستندات والملفات المكتبية",
     "support.documents.body":
-      "يمكن تحويل DOCX وTXT وMarkdown وHTML وPPTX وODT وODP وODS وXLSX إلى صيغ مستندات أو جداول قابلة للقراءة. ويمكن تحويل PDF إلى صفحات PNG أو ملفات PDF مضغوطة.",
+      "يمكن تحويل DOCX وTXT وMarkdown وHTML وPPTX وODT وODP وODS وXLSX إلى صيغ مستندات أو جداول قابلة للقراءة. ويمكن تحويل PDF إلى صفحات PNG أو JPG أو WebP أو ملفات PDF مضغوطة.",
     "support.data.title": "البيانات والجداول",
     "support.data.body":
       "يمكن نقل JSON وYAML وCSV وTSV وXML وXLSX وvCard وiCal وملفات env بين صيغ منظمة ومقروءة.",
@@ -310,6 +316,8 @@ const translations = {
     "queue.clear": "مسح",
     "queue.go": "تحويل الملفات",
     "queue.empty": "ستظهر ملفاتك هنا مع قائمة مخرجات لكل ملف.",
+    "quality.label": "جودة الصورة",
+    "quality.labelFor": ({ filename }) => `جودة الصورة لـ ${filename}`,
     "action.ready": ({ count }) => `${count} ملف جاهز`,
     "action.converting": ({ count }) => `جار تحويل ${count} ملف`,
     "action.converted": ({ count }) => `${count} ملف محوّل جاهز`,
@@ -387,6 +395,8 @@ const translations = {
     "output.pngStill": "لقطة PNG",
     "output.compressedPdf": "PDF مضغوط",
     "output.pngImages": "صور PNG",
+    "output.jpgImages": "صور JPG",
+    "output.webpImages": "صور WebP",
     "output.zipArchive": "أرشيف ZIP",
     "output.tarArchive": "أرشيف TAR",
     "output.tgzArchive": "أرشيف TGZ",
@@ -434,7 +444,7 @@ const translations = {
       "Pliki ZIP, RAR, 7Z, TAR, GZIP, TGZ, BZ2, XZ, Zstandard, Brotli, LZ i LZMA mogą być wykrywane i przepakowywane.",
     "support.documents.title": "Dokumenty i biuro",
     "support.documents.body":
-      "DOCX, TXT, Markdown, HTML, PPTX, ODT, ODP, ODS i XLSX mogą stać się czytelnymi dokumentami lub tabelami. PDF-y mogą stać się stronami PNG albo skompresowanymi PDF-ami.",
+      "DOCX, TXT, Markdown, HTML, PPTX, ODT, ODP, ODS i XLSX mogą stać się czytelnymi dokumentami lub tabelami. PDF-y mogą stać się stronami PNG, JPG albo WebP lub skompresowanymi PDF-ami.",
     "support.data.title": "Dane i arkusze",
     "support.data.body":
       "JSON, YAML, CSV, TSV, XML, XLSX, vCard, iCal i pliki env można przenosić między uporządkowanymi, czytelnymi formatami.",
@@ -480,6 +490,8 @@ const translations = {
     "queue.go": "Konwertuj pliki",
     "queue.empty":
       "Twoje pliki pojawią się tutaj z menu formatu wyjściowego dla każdego z nich.",
+    "quality.label": "Jakość obrazu",
+    "quality.labelFor": ({ filename }) => `Jakość obrazu dla ${filename}`,
     "action.ready": ({ count }) => `Gotowe pliki: ${count}`,
     "action.converting": ({ count }) => `Konwersja plików: ${count}`,
     "action.converted": ({ count }) => `Przekonwertowane pliki gotowe: ${count}`,
@@ -558,6 +570,8 @@ const translations = {
     "output.pngStill": "Klatka PNG",
     "output.compressedPdf": "Skompresowany PDF",
     "output.pngImages": "Obrazy PNG",
+    "output.jpgImages": "Obrazy JPG",
+    "output.webpImages": "Obrazy WebP",
     "output.zipArchive": "Archiwum ZIP",
     "output.tarArchive": "Archiwum TAR",
     "output.tgzArchive": "Archiwum TGZ",
@@ -605,7 +619,7 @@ const translations = {
       "ZIP, RAR, 7Z, TAR, GZIP, TGZ, BZ2, XZ, Zstandard, Brotli, LZ und LZMA können erkannt und neu gepackt werden.",
     "support.documents.title": "Dokumente & Office",
     "support.documents.body":
-      "DOCX, TXT, Markdown, HTML, PPTX, ODT, ODP, ODS und XLSX können zu lesbaren Dokument- oder Tabellenformaten werden. PDFs können PNG-Seiten oder komprimierte PDFs werden.",
+      "DOCX, TXT, Markdown, HTML, PPTX, ODT, ODP, ODS und XLSX können zu lesbaren Dokument- oder Tabellenformaten werden. PDFs können PNG-, JPG- oder WebP-Seiten oder komprimierte PDFs werden.",
     "support.data.title": "Daten & Tabellen",
     "support.data.body":
       "JSON, YAML, CSV, TSV, XML, XLSX, vCard, iCal und env-Dateien können zwischen strukturierten, lesbaren Formaten wechseln.",
@@ -651,6 +665,8 @@ const translations = {
     "queue.go": "Dateien konvertieren",
     "queue.empty":
       "Deine Dateien erscheinen hier mit einem Ausgabemenü für jede Datei.",
+    "quality.label": "Bildqualität",
+    "quality.labelFor": ({ filename }) => `Bildqualität für ${filename}`,
     "action.ready": ({ count }) => `Bereite Dateien: ${count}`,
     "action.converting": ({ count }) => `Dateien werden konvertiert: ${count}`,
     "action.converted": ({ count }) => `Konvertierte Dateien bereit: ${count}`,
@@ -730,6 +746,8 @@ const translations = {
     "output.pngStill": "PNG-Standbild",
     "output.compressedPdf": "Komprimiertes PDF",
     "output.pngImages": "PNG-Bilder",
+    "output.jpgImages": "JPG-Bilder",
+    "output.webpImages": "WebP-Bilder",
     "output.zipArchive": "ZIP-Archiv",
     "output.tarArchive": "TAR-Archiv",
     "output.tgzArchive": "TGZ-Archiv",
