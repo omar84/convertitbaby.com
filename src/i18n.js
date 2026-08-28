@@ -145,6 +145,7 @@ const translations = {
     "queue.empty":
       "Your files will appear here with an output menu for each one.",
     "quality.label": "Image Quality",
+    "quality.labelFor": ({ filename }) => `Image quality for ${filename}`,
     "action.ready": ({ count }) => `${enPlural(count, "file")} ready`,
     "action.converting": ({ count }) => `Converting ${enPlural(count, "file")}`,
     "action.converted": ({ count }) =>
@@ -316,6 +317,7 @@ const translations = {
     "queue.go": "تحويل الملفات",
     "queue.empty": "ستظهر ملفاتك هنا مع قائمة مخرجات لكل ملف.",
     "quality.label": "جودة الصورة",
+    "quality.labelFor": ({ filename }) => `جودة الصورة لـ ${filename}`,
     "action.ready": ({ count }) => `${count} ملف جاهز`,
     "action.converting": ({ count }) => `جار تحويل ${count} ملف`,
     "action.converted": ({ count }) => `${count} ملف محوّل جاهز`,
@@ -489,6 +491,7 @@ const translations = {
     "queue.empty":
       "Twoje pliki pojawią się tutaj z menu formatu wyjściowego dla każdego z nich.",
     "quality.label": "Jakość obrazu",
+    "quality.labelFor": ({ filename }) => `Jakość obrazu dla ${filename}`,
     "action.ready": ({ count }) => `Gotowe pliki: ${count}`,
     "action.converting": ({ count }) => `Konwersja plików: ${count}`,
     "action.converted": ({ count }) => `Przekonwertowane pliki gotowe: ${count}`,
@@ -663,6 +666,7 @@ const translations = {
     "queue.empty":
       "Deine Dateien erscheinen hier mit einem Ausgabemenü für jede Datei.",
     "quality.label": "Bildqualität",
+    "quality.labelFor": ({ filename }) => `Bildqualität für ${filename}`,
     "action.ready": ({ count }) => `Bereite Dateien: ${count}`,
     "action.converting": ({ count }) => `Dateien werden konvertiert: ${count}`,
     "action.converted": ({ count }) => `Konvertierte Dateien bereit: ${count}`,

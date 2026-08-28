@@ -23,11 +23,12 @@ const conversionEvents = {
     trackOptionalConversionEvent("trackConversionSuccess", args),
 };
 
+const DEFAULT_QUALITY_PERCENT = 92;
+
 const state = {
   items: [],
   urls: [],
   isConverting: false,
-  quality: 0.92,
   status: { key: "status.dropFiles", params: {} },
 };
 
@@ -47,33 +48,6 @@ const downloadAllButton = document.querySelector("#download-all-button");
 const statusEl = document.querySelector(".status");
 const progressEl = document.querySelector(".progress");
 const progressBar = document.querySelector(".progress-bar");
-
-// --- Quality Slider UI Element Setup ---
-const sliderContainer = document.createElement("div");
-sliderContainer.className = "quality-settings-panel";
-sliderContainer.style.margin = "1rem 0";
-sliderContainer.style.display = "none";
-
-sliderContainer.innerHTML = `
-  <label for="global-quality-slider" style="font-weight: bold; font-size: 0.95rem; display: block; margin-bottom: 0.25rem;">
-    <span data-i18n="quality.label">Image Quality</span>: <span id="global-quality-value">92</span>%
-  </label>
-  <input type="range" id="global-quality-slider" min="1" max="100" value="92" style="width: 100%; max-width: 300px; cursor: pointer;" data-i18n-attrs="aria-label:quality.label">
-`;
-
-queueEl.parentNode.insertBefore(sliderContainer, queueEl);
-
-const qualitySlider = sliderContainer.querySelector("#global-quality-slider");
-const qualityValueDisplay = sliderContainer.querySelector("#global-quality-value");
-
-qualitySlider.addEventListener("input", (e) => {
-  const displayVal = parseInt(e.target.value, 10);
-  qualityValueDisplay.textContent = displayVal;
-
-  // Prevent WebP layout engine bloat at 100% by applying a near-lossless float cap
-  state.quality = displayVal === 100 ? 0.999999 : displayVal / 100;
-});
-// ----------------------------------------
 
 initI18n({
   onLanguageChange: () => {
@@ -132,7 +106,6 @@ function addFiles(fileList) {
   state.items.push(...newItems);
   fileInput.value = "";
   renderQueue();
-  updateSliderVisibility();
   setStatus("status.filesAdded", {
     added: newItems.length,
     total: state.items.length,
@@ -140,40 +113,44 @@ function addFiles(fileList) {
   queuePanel.scrollIntoView({ behavior: "smooth", block: "start" });
 }
 
-function updateSliderVisibility() {
-  const lossyOutputs = ["image/jpeg", "image/webp", "jpeg", "jpg", "webp"];
+const LOSSY_OUTPUT_VALUES = ["image/jpeg", "image/webp", "jpeg", "jpg", "webp"];
 
-  const hasLossyOutputActive = state.items.some((item) => {
-    if (!item.output) return false;
+// Whether the item's selected output honours the quality setting.
+function itemSupportsQuality(item) {
+  if (!item.output) return false;
 
-    const outputMime = item.output.toLowerCase();
+  const outputValue = item.output.toLowerCase();
+  if (LOSSY_OUTPUT_VALUES.includes(outputValue)) return true;
 
-    if (lossyOutputs.includes(outputMime)) return true;
+  const outputOption = getOutputOptions(item).find(
+    (option) => option.value === item.output,
+  );
+  if (!outputOption) return false;
 
-    const outputOption = getOutputOptions(item).find(opt => opt.value === item.output);
-    if (outputOption) {
-      const outputKind = outputOption.kind?.toLowerCase() || "";
+  const outputKind = outputOption.kind?.toLowerCase() || "";
+  if (outputKind.includes("jpeg") || outputKind.includes("webp")) return true;
 
-      if (outputKind.includes("jpeg") || outputKind.includes("webp")) {
-        return true;
-      }
+  // SVG uploads are classified as "vector"; image→PDF also uses the quality slider.
+  const isSourceImageOrSvg = ["image", "vector"].includes(item.kind);
+  const isTargetingPdf =
+    outputValue.includes("pdf") || outputKind.includes("pdf");
+  return isSourceImageOrSvg && isTargetingPdf;
+}
 
-      // SVG uploads are classified as "vector"; image→PDF also uses the quality slider.
-      const isSourceImageOrSvg = ["image", "vector"].includes(item.kind);
-      const isTargetingPdf = outputMime.includes("pdf") || outputKind.includes("pdf");
-      if (isSourceImageOrSvg && isTargetingPdf) {
-        return true;
-      }
-    }
+// The first item with a visible slider leads: moving it drags every following
+// slider along, until that follower is adjusted on its own and unbinds itself.
+function getQualityLeader() {
+  return state.items.find(itemSupportsQuality) || null;
+}
 
-    return false;
-  });
+function clampQualityPercent(value) {
+  if (!Number.isFinite(value)) return DEFAULT_QUALITY_PERCENT;
+  return Math.max(1, Math.min(100, Math.round(value)));
+}
 
-  const nextDisplayState = hasLossyOutputActive ? "block" : "none";
-
-  if (sliderContainer.style.display !== nextDisplayState) {
-    sliderContainer.style.display = nextDisplayState;
-  }
+function qualityToFraction(percent) {
+  // Prevent WebP layout engine bloat at 100% by applying a near-lossless float cap
+  return percent === 100 ? 0.999999 : percent / 100;
 }
 
 function createQueueItem(file) {
@@ -188,11 +165,14 @@ function createQueueItem(file) {
     status: defaultOutput ? "ready" : outputs.length ? "unavailable" : "unsupported",
     errorMessage: "",
     downloads: [],
+    qualityPercent: getQualityLeader()?.qualityPercent ?? DEFAULT_QUALITY_PERCENT,
+    qualityUnbound: false,
   };
 }
 
 function renderQueue() {
   queueEl.replaceChildren();
+  const qualityLeader = getQualityLeader();
   emptyQueueEl.hidden = state.items.length > 0;
   const downloads = getAllDownloads();
   const hasConvertibleItems = state.items.some((item) => getSelectedOutput(item));
@@ -245,7 +225,6 @@ function renderQueue() {
       item.errorMessage = "";
       revokeItemDownloads(item);
       renderQueue();
-      updateSliderVisibility();
     });
 
     const status = document.createElement("div");
@@ -261,8 +240,11 @@ function renderQueue() {
       state.items = state.items.filter((candidate) => candidate.id !== item.id);
       revokeItemDownloads(item);
       renderQueue();
-      updateSliderVisibility();
     });
+
+    const quality = itemSupportsQuality(item)
+      ? createQualityControl(item, item === qualityLeader)
+      : null;
 
     const downloads = document.createElement("div");
     downloads.className = "item-downloads";
@@ -275,9 +257,68 @@ function renderQueue() {
     supportNote.hidden = !hasDisabledOutputs || item.status === "done";
     supportNote.textContent = t("queue.supportNote");
 
-    row.append(info, select, status, remove, supportNote, downloads);
+    row.append(info, select, status, remove);
+    if (quality) row.append(quality);
+    row.append(supportNote, downloads);
     queueEl.append(row);
   });
+}
+
+function createQualityControl(item, isLeader) {
+  const wrapper = document.createElement("div");
+  wrapper.className = "item-quality";
+  wrapper.dataset.qualityFor = item.id;
+
+  const label = document.createElement("label");
+  label.className = "item-quality-label";
+  label.htmlFor = `quality-${item.id}`;
+  const valueEl = document.createElement("span");
+  valueEl.className = "item-quality-value";
+  valueEl.textContent = String(item.qualityPercent);
+  label.append(`${t("quality.label")}: `, valueEl, "%");
+
+  const slider = document.createElement("input");
+  slider.className = "item-quality-slider";
+  slider.type = "range";
+  slider.id = `quality-${item.id}`;
+  slider.name = `quality-${item.id}`;
+  slider.min = "1";
+  slider.max = "100";
+  slider.value = String(item.qualityPercent);
+  slider.ariaLabel = t("quality.labelFor", { filename: item.file.name });
+  slider.disabled = state.isConverting;
+
+  slider.addEventListener("input", () => {
+    const percent = clampQualityPercent(parseInt(slider.value, 10));
+    item.qualityPercent = percent;
+    valueEl.textContent = String(percent);
+
+    if (isLeader) {
+      state.items.forEach((other) => {
+        if (other === item || other.qualityUnbound) return;
+        other.qualityPercent = percent;
+        syncQualityControl(other);
+      });
+      return;
+    }
+
+    // Adjusting any slider below the first one unbinds it for good.
+    item.qualityUnbound = true;
+  });
+
+  wrapper.append(label, slider);
+  return wrapper;
+}
+
+function syncQualityControl(item) {
+  const wrapper = queueEl.querySelector(`[data-quality-for="${item.id}"]`);
+  if (!wrapper) return;
+  wrapper.querySelector(".item-quality-slider").value = String(
+    item.qualityPercent,
+  );
+  wrapper.querySelector(".item-quality-value").textContent = String(
+    item.qualityPercent,
+  );
 }
 
 function actionSummaryLabel({ downloads, hasPendingConvertibleItems }) {
@@ -306,8 +347,6 @@ async function convertAll() {
   const batchStartedAt = performance.now();
   let completed = 0;
 
-  qualitySlider.disabled = true;
-
   try {
     renderQueue();
 
@@ -324,7 +363,7 @@ async function convertAll() {
           const downloads = await convertQueueItem(
             item.file,
             output,
-            state.quality,
+            qualityToFraction(item.qualityPercent),
           );
           item.downloads = downloads.map((download) =>
             createDownload(download.blob, download.filename, download.mimeType),
@@ -379,9 +418,7 @@ async function convertAll() {
     }
   } finally {
     setConversionActive(false);
-    qualitySlider.disabled = false;
     renderQueue();
-    updateSliderVisibility();
   }
 }
 
@@ -464,7 +501,6 @@ function clearQueue() {
   clearDownloads();
   setProgress(null);
   renderQueue();
-  updateSliderVisibility();
   setStatus("status.dropFiles");
 }
 
